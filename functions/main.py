@@ -1,21 +1,53 @@
-# Welcome to Cloud Functions for Firebase for Python!
-# To get started, simply uncomment the below code or create your own.
-# Deploy with `firebase deploy`
+import firebase_admin
+from firebase_admin import firestore, storage
+from firebase_functions import https_fn, options
 
-from firebase_functions import https_fn
-from firebase_functions.options import set_global_options
-from firebase_admin import initialize_app
+# Initialize Firebase Admin SDK
+firebase_admin.initialize_app()
 
-# For cost control, you can set the maximum number of containers that can be
-# running at the same time. This helps mitigate the impact of unexpected
-# traffic spikes by instead downgrading performance. This limit is a per-function
-# limit. You can override the limit for each function using the max_instances
-# parameter in the decorator, e.g. @https_fn.on_request(max_instances=5).
-set_global_options(max_instances=10)
+@https_fn.on_request(
+    memory=options.MemoryOption.GB_2,
+    timeout_sec=300,
+    cors=options.CorsOptions(cors_origins="*", cors_methods=["get", "post"])
+)
+def processViolationImage(req: https_fn.Request) -> https_fn.Response:
+    """
+    Processes a violation image.
 
-# initialize_app()
-#
-#
-# @https_fn.on_request()
-# def on_request_example(req: https_fn.Request) -> https_fn.Response:
-#     return https_fn.Response("Hello world!")
+    Args:
+        req (https_fn.Request): The HTTP request object.
+
+    Returns:
+        A JSON response indicating success or failure.
+    """
+    if req.method != 'POST':
+        return https_fn.Response('Method not allowed', status=405)
+
+    try:
+        # Get the image from the request
+        image = req.files.get('image')
+        if not image:
+            return https_fn.Response('No image provided', status=400)
+
+        # Upload the image to Firebase Storage
+        bucket = storage.bucket()
+        blob = bucket.blob(f"violations/{image.filename}")
+        blob.upload_from_string(
+            image.read(),
+            content_type=image.content_type
+        )
+
+        # Get the image URL
+        image_url = blob.public_url
+
+        # Save the violation details to Firestore
+        db = firestore.client()
+        db.collection('violations').add({
+            'image_url': image_url,
+            'timestamp': firestore.SERVER_TIMESTAMP
+        })
+
+        return https_fn.Response('{"message": "Violation processed successfully"}', status=200, headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        return https_fn.Response(f'{"error": "An unexpected error occurred: {str(e)}"}', status=500, headers={"Content-Type": "application/json"})
